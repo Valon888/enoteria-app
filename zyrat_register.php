@@ -405,17 +405,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
  * Send confirmation email to the office after registration.
  */
 function sendConfirmationEmail($to, $officeName, $transactionId) {
-    $subject = "Konfirmimi i Regjistrimit të Zyrës Noteriale | Noteria";
+    $subject = "Konfirmimi i Regjistrimit të Zyrës Noteriale | e-Noteria";
     $message = "Përshëndetje $officeName,\n\n"
-        . "Zyra juaj noteriale është regjistruar me sukses në platformën Noteria.\n"
+        . "Zyra juaj noteriale është regjistruar me sukses në platformën e-Noteria.\n"
         . "ID e transaksionit tuaj është: $transactionId\n\n"
         . "Ky konfirmim shërben si provë e regjistrimit tuaj në sistemin tonë. Ju do të kontaktoheni së shpejti nga ekipi ynë për verifikimin e të dhënave dhe aktivizimin e plotë të llogarisë suaj.\n\n"
-        . "Për çdo pyetje apo sqarim shtesë, ju lutemi të na kontaktoni në support@noteria.com ose në numrin +383 44 123 456.\n\n"
-        . "Ju faleminderit që zgjodhët platformën Noteria!\n\n"
+        . "Për çdo pyetje apo sqarim shtesë, ju lutemi të na kontaktoni në support@e-noteria.com ose në numrin +383 44 123 456.\n\n"
+        . "Ju faleminderit që zgjodhët platformën e-Noteria!\n\n"
         . "Me respekt,\n"
-        . "Ekipi i Noterisë";
-    $headers = "From: Noteria <noreply@noteria.com>\r\n"
-        . "Reply-To: support@noteria.com\r\n"
+        . "Ekipi i e-Noterisë";
+    $headers = "From: e-Noteria <noreply@e-noteria.com>\r\n"
+        . "Reply-To: support@e-noteria.com\r\n"
         . "Content-Type: text/plain; charset=UTF-8";
     
     // Try to send email, but don't stop execution if it fails (development environment)
@@ -441,7 +441,7 @@ function sendConfirmationEmail($to, $officeName, $transactionId) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Regjistro Zyrën | Noteria</title>
+    <title>Regjistro Zyrën | e-Noteria</title>
     <link href="https://fonts.googleapis.com/css?family=Montserrat:400,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/assets/fontawesome/all.min.css">
     <link rel="stylesheet" href="css/payment_styles.css">
@@ -1035,7 +1035,7 @@ function sendConfirmationEmail($to, $officeName, $transactionId) {
         <header>
             <div class="logo" style="justify-content:center;">
                 <img src="images/pngwing.com (1).png" alt="Noteria Logo" style="height:100px;width:auto;display:inline-block;margin-bottom:8px;">
-                <span style="display:block;font-size:2rem;color:#1a56db;font-weight:700;margin-top:8px;">Noteria</span>
+                <span style="display:block;font-size:2rem;color:#1a56db;font-weight:700;margin-top:8px;">e-Noteria</span>
             </div>
             <h2>Regjistro Zyrën Noteriale</h2>
         </header>
@@ -1417,7 +1417,7 @@ function sendConfirmationEmail($to, $officeName, $transactionId) {
         <div class="support-info">
             <h3><i class="fas fa-headset"></i> Keni nevojë për ndihmë?</h3>
             <p>Kontaktoni ekipin tonë të mbështetjes për çdo pyetje ose problem:</p>
-            <p><i class="fas fa-envelope"></i> Email: <a href="mailto:support@noteria.com">support@noteria.com</a></p>
+            <p><i class="fas fa-envelope"></i> Email: <a href="mailto:support@e-noteria.com">support@e-noteria.com</a></p>
             <p><i class="fas fa-phone"></i> Tel: +383 44 123 456</p>
         </div>
     </div>

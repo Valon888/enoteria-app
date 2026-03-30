@@ -8,7 +8,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Politika e Privatësisë | Noteria</title>
+    <title>Politika e Privatësisë | e-Noteria</title>
     <link rel="stylesheet" href="/assets/fontawesome/all.min.css">
     <style>
         :root {
@@ -198,7 +198,7 @@
     <div class="privacy-content">
         <div class="privacy-section">
             <h2>Hyrje</h2>
-            <p>Mirë se vini në politikën e privatësisë të Noteria-s. Ne e vlerësojmë besimin tuaj dhe jemi të përkushtuar për të mbrojtur privatësinë tuaj. Kjo politikë shpjegon se si ne mbledhim, përdorim dhe mbrojmë të dhënat tuaja personale.</p>
+            <p>Mirë se vini në politikën e privatësisë të e-Noteria-s. Ne e vlerësojmë besimin tuaj dhe jemi të përkushtuar për të mbrojtur privatësinë tuaj. Kjo politikë shpjegon se si ne mbledhim, përdorim dhe mbrojmë të dhënat tuaja personale.</p>
             
             <p>Duke përdorur shërbimet tona, ju pranoni praktikat e përshkruara në këtë politikë të privatësisë. Ne ju inkurajojmë ta lexoni me kujdes për të kuptuar më mirë se si ne ruajmë dhe përpunojmë informacionin tuaj personal.</p>
         </div>
@@ -364,7 +364,7 @@
             <p>Nëse keni pyetje, shqetësime ose kërkesa në lidhje me këtë politikë privatësie ose trajtimin e të dhënave tuaja personale, ju lutemi na kontaktoni në:</p>
             
             <ul>
-                <li><strong>Email:</strong> privacy@noteria.com</li>
+                <li><strong>Email:</strong> privacy@e-noteria.com</li>
                 <li><strong>Adresa:</strong> Rruga "Ismail Qemali", Nr. 123, Prishtinë, Kosovë</li>
                 <li><strong>Telefon:</strong> +383 45 XXX XXXX</li>
             </ul>

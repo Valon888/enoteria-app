@@ -865,7 +865,7 @@ $reservation_count = 500000; // Qindra mijëra rezervime në ditë
         <div class="container">
             <div class="footer-content">
                 <div class="footer-section">
-                    <h5><i class="fas fa-balance-scale me-2"></i>E-Noteria SaaS</h5>
+                    <h5>E-Noteria SaaS</h5>
                     <p><?php echo $text['footer']['official'][$lang]; ?></p>
                     <div class="mt-3">
                         <a href="#" class="text-white me-3"><i class="fab fa-facebook-f"></i></a>

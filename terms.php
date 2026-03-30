@@ -197,7 +197,7 @@
             <h4>Ndryshimet në Kushtet</h4>
             <p>e-Noteria rezervon të drejtën të ndryshojë këto kushte në çdo kohë. Çdo ndryshim do të publikohet në këtë faqe dhe do të hyjë në fuqi menjëherë pas publikimit.</p>
             <h4>Kontakt</h4>
-            <p>Për çdo pyetje ose paqartësi, ju lutemi na kontaktoni në <a href="mailto:support@noteria.com" style="color:#2d6cdf;">support@noteria.com</a>.</p>
+            <p>Për çdo pyetje ose paqartësi, ju lutemi na kontaktoni në <a href="mailto:support@e-noteria.com" style="color:#2d6cdf;">support@e-noteria.com</a>.</p>
         </div>
         <div class="terms-footer">
             Platforma krijuar me dashuri nga <b>Valon Sadiku</b> &copy; <?php echo date('Y'); ?>.<br>

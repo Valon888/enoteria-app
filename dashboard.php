@@ -703,7 +703,7 @@ try {
 
         <div class="sidebar-section">Shërbime</div>
         <a href="invoice_list.php" class="sidebar-link"><i class="fas fa-file-invoice"></i>Faturat</a>
-        <a href="#mesazhe"    class="sidebar-link"><i class="fas fa-comments"></i>Mesazhe</a>
+        <a href="chat.php"    class="sidebar-link"><i class="fas fa-comments"></i>Mesazhe</a>
         <a href="notification.php"   class="sidebar-link"><i class="fas fa-bell"></i>Njoftimet</a>
 
         <?php if ($roli === 'admin'): ?>

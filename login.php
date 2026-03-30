@@ -1,4 +1,4 @@
-﻿<?php
+﻿﻿<?php
 // Move all session and ini_set calls to the very top, before any output
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
@@ -7,15 +7,7 @@ ini_set('session.cookie_httponly', 1);
 ini_set('session.cookie_secure', isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 1 : 0);
 ini_set('session.use_strict_mode', 1);
 
-// Redirekto në HTTPS nëse nuk është aktiv dhe nëse variablat ekzistojnë
-if (
-    (empty($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === 'off') &&
-    isset($_SERVER['HTTP_HOST'], $_SERVER['REQUEST_URI'])
-) {
-    $redirect = 'https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
-    header('Location: ' . $redirect);
-    exit();
-}
+// Redirect në HTTPS është hequr për zhvillim lokal pa SSL
 
 // Cloudflare real IP support
 if (isset($_SERVER['HTTP_CF_CONNECTING_IP'])) {
@@ -38,6 +30,13 @@ if ($_SESSION['login_attempts'] > 5 && (time() - $_SESSION['last_login_attempt']
 
 require_once 'confidb.php';
 require_once 'activity_logger.php';
+
+if (!function_exists('log_activity')) {
+    function log_activity($user_id = null, $action = '', $details = '') {
+        // Funksion placeholder: nuk bën asgjë aktualisht
+        return true;
+    }
+}
 require_once 'mfa_helper.php';
 
 if (!isset($_SESSION['regenerated'])) {

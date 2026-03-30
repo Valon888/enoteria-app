@@ -38,7 +38,6 @@ if ($rowLast) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_notary'])) {
     // Verifiko CSRF token
     if (empty($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
-        // Log unauthorized action in audit_log
         try {
             $userId = $_SESSION['user_id'] ?? 0;
             $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
@@ -51,16 +50,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_notary'])) {
         } catch (PDOException $e) {
             error_log('Audit log insert failed: ' . $e->getMessage());
         }
-        // Mos shfaq mesazh për përdoruesin, vetëm log
         $error = null;
     } else {
-        $userId  = $_SESSION['user_id'];
-        $service = trim($_POST['service']  ?? '');
-        $zyra_id = trim($_POST['zyra_id']  ?? '');
-        $date    = $_POST['date']  ?? '';
-        $time    = $_POST['time']  ?? '';
-        $payment_method = trim($_POST['payment_method'] ?? 'card');
-        $punonjesi_id = !empty($_POST['punonjesi_id']) ? (int)$_POST['punonjesi_id'] : null;
+        $userId         = $_SESSION['user_id'];
+        $service        = trim($_POST['service']         ?? '');
+        $zyra_id        = trim($_POST['zyra_id']         ?? '');
+        $date           = $_POST['date']                 ?? '';
+        $time           = $_POST['time']                 ?? '';
+        $payment_method = trim($_POST['payment_method']  ?? 'card');
+        // noter_id is the actual column name in the reservations table
+        $noter_id       = !empty($_POST['punonjesi_id']) ? (int)$_POST['punonjesi_id'] : null;
 
         if (empty($service) || empty($zyra_id) || empty($date) || empty($time)) {
             $error = "Ju lutemi plotësoni të gjitha fushat e detyrueshme!";
@@ -92,67 +91,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_notary'])) {
                 if ($stmtChk->rowCount() > 0) $error = "Ky orar është i zënë për këtë zyrë!";
             }
 
-            // Validate that selected employee belongs to the selected office and is active
-            if (!$error && $punonjesi_id) {
+            // Valido punonjësin e zgjedhur
+            if (!$error && $noter_id) {
                 $employeeFound = false;
 
-                // Try with punonjesit table first (newer schema)
+                // Provo me tabelën punonjesit (schema e re)
                 try {
                     $stmtEmpCheck = $pdo->prepare("SELECT id FROM punonjesit WHERE id = ? AND zyra_id = ? AND statusi = 'aktiv'");
-                    $stmtEmpCheck->execute([$punonjesi_id, $zyra_id]);
+                    $stmtEmpCheck->execute([$noter_id, $zyra_id]);
                     $employeeFound = $stmtEmpCheck->rowCount() > 0;
                 } catch (PDOException $e) {
                     error_log("Employee check failed on punonjesit table: " . $e->getMessage());
                 }
 
-                // Try with punetoret table (legacy schema) only if still not found
+                // Provo me tabelën punetoret (schema e vjetër)
                 if (!$employeeFound) {
                     try {
                         $stmtEmpCheck = $pdo->prepare("SELECT id FROM punetoret WHERE id = ? AND zyra_id = ? AND active = 1");
-                        $stmtEmpCheck->execute([$punonjesi_id, $zyra_id]);
+                        $stmtEmpCheck->execute([$noter_id, $zyra_id]);
                         $employeeFound = $stmtEmpCheck->rowCount() > 0;
                     } catch (PDOException $e) {
-                        error_log("Legacy employee check skipped (punetoret table missing or invalid): " . $e->getMessage());
+                        error_log("Legacy employee check skipped: " . $e->getMessage());
                     }
                 }
 
                 if (!$employeeFound) {
-                    error_log("Selected employee not available for reservation; continuing without employee assignment. user_id=" . (int)$userId . ", zyra_id=" . (int)$zyra_id . ", requested_employee_id=" . (int)$punonjesi_id);
-                    $punonjesi_id = null;
+                    error_log("Selected employee not available; continuing without employee assignment. user_id=" . (int)$userId . ", zyra_id=" . (int)$zyra_id . ", noter_id=" . (int)$noter_id);
+                    $noter_id = null;
                 }
             }
 
             // Ruaj rezervimin
             if (!$error) {
                 try {
-                    // Try to insert with punonjesi_id and payment_method columns
-                    $stmtIns = $pdo->prepare("INSERT INTO reservations (user_id, zyra_id, punonjesi_id, service, date, time, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')");
-                    if ($stmtIns->execute([$userId, $zyra_id, $punonjesi_id, $service, $date, $time, $payment_method])) {
+                    // FIX: Kolona e saktë është noter_id (jo punonjesi_id)
+                    $stmtIns = $pdo->prepare("INSERT INTO reservations (user_id, zyra_id, noter_id, service, date, time, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')");
+                    if ($stmtIns->execute([$userId, $zyra_id, $noter_id, $service, $date, $time, $payment_method])) {
                         $reservation_id = $pdo->lastInsertId();
                         $success = "Termini u rezervua me sukses! Tani mund të kryeni pagesën.";
-                        // Rifresko CSRF token pas veprimit të suksesshëm
                         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                     } else {
                         $error = "Ndodhi një gabim gjatë rezervimit. Provoni përsëri.";
                     }
                 } catch (PDOException $e) {
-                    // If payment_method column doesn't exist, try without it
-                    error_log("Payment method insert failed: " . $e->getMessage() . ". Retrying without payment_method column.");
-                    try {
-                        $stmtIns = $pdo->prepare("INSERT INTO reservations (user_id, zyra_id, punonjesi_id, service, date, time, payment_status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
-                        if ($stmtIns->execute([$userId, $zyra_id, $punonjesi_id, $service, $date, $time])) {
-                            $reservation_id = $pdo->lastInsertId();
-                            // Store payment_method in session for later use
-                            $_SESSION['last_payment_method'] = $payment_method;
-                            $success = "Termini u rezervua me sukses! Tani mund të kryeni pagesën.";
-                            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-                        } else {
-                            $error = "Ndodhi një gabim gjatë rezervimit. Provoni përsëri.";
-                        }
-                    } catch (PDOException $e2) {
-                        error_log("Reservation insert error: " . $e2->getMessage());
-                        $error = "Ndodhi një gabim. Ju lutemi provoni përsëri.";
-                    }
+                    error_log("Reservation insert error: " . $e->getMessage());
+                    $error = "Ndodhi një gabim. Ju lutemi provoni përsëri.";
                 }
             }
         }
@@ -163,27 +146,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_notary'])) {
 $stmt  = $pdo->query("SELECT id, emri, qyteti, shteti FROM zyrat");
 $zyrat = $stmt->fetchAll();
 
-// Service pricing map - base prices (TVSH will be added on frontend)
+// Çmimet e shërbimeve (pa TVSH)
 $service_prices = [
-    'Kontratë Shitblerjeje' => 50,
-    'Kontratë dhuratë' => 40,
-    'Kontratë qiraje' => 30,
-    'Kontratë furnizimi' => 35,
-    'Kontratë përkujdesjeje' => 40,
-    'Kontratë prenotimi' => 30,
+    'Kontratë Shitblerjeje'              => 50,
+    'Kontratë dhuratë'                   => 40,
+    'Kontratë qiraje'                    => 30,
+    'Kontratë furnizimi'                 => 35,
+    'Kontratë përkujdesjeje'             => 40,
+    'Kontratë prenotimi'                 => 30,
     'Kontratë të tjera të lejuara me ligj' => 50,
-    'Autorizim për vozitje të automjetit' => 10,
-    'Legalizim' => 25,
-    'Vertetim Dokumenti' => 15,
-    'Deklaratë' => 20,
-    'Këmbimet Pronash' => 30
+    'Autorizim për vozitje të automjetit'  => 10,
+    'Legalizim'                          => 25,
+    'Vertetim Dokumenti'                 => 15,
+    'Deklaratë'                          => 20,
+    'Këmbimet Pronash'                   => 30,
 ];
 $service_prices_json = json_encode($service_prices);
 
 // Gjuha
 $lang = $_GET['lang'] ?? $_COOKIE['lang'] ?? 'sq';
-if (!in_array($lang, ['sq','sr','en'])) $lang = 'sq';
-setcookie('lang', $lang, time()+60*60*24*30, '/');
+if (!in_array($lang, ['sq', 'sr', 'en'])) $lang = 'sq';
+setcookie('lang', $lang, time() + 60 * 60 * 24 * 30, '/');
 
 $labels = [
     'sq' => [
@@ -225,17 +208,17 @@ $labels = [
 ];
 $L = $labels[$lang];
 
-// Ditar Ramazanit për template
+// Ramazani
 $today         = date('Y-m-d');
 $ramazan_start = '2026-02-19';
 $ramazan_end   = '2026-03-18';
 $is_ramazan    = ($today >= $ramazan_start && $today <= $ramazan_end);
 $max_time      = $is_ramazan ? '15:00' : '16:00';
 
-// Mesazh urimi për Ditën e parë të Fitër Bajramit
-$show_bajram_greeting = ($today === '2026-03-19' || $today === '2026-03-20');
+// Urimi i Bajramit
+$show_bajram_greeting  = ($today === '2026-03-19' || $today === '2026-03-20');
 $bajram_greeting_title = 'Urime Fitër Bajramin!';
-$bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar burim gëzimi, paqeje dhe shëndetit për ju dhe të gjithë të afërmit tuaj.';
+$bajram_greeting_text  = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar burim gëzimi, paqeje dhe shëndetit për ju dhe të gjithë të afërmit tuaj.';
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo htmlspecialchars($lang); ?>">
@@ -263,277 +246,52 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
         .btn-primary:hover { background:#002244; border-color:#002244; transform:translateY(-1px); }
         .section-title { position:relative; padding-bottom:10px; margin-bottom:25px; }
         .section-title::after { content:''; position:absolute; left:0; bottom:0; width:60px; height:3px; background:var(--gov-gold); }
-        /* ── Festive Greeting – Fitër Bajrami ── */
-        @keyframes fg-shimmer {
-            0%   { transform: translateX(-100%) skewX(-15deg); }
-            100% { transform: translateX(380%)  skewX(-15deg); }
-        }
-        @keyframes fg-float {
-            0%, 100% { transform: translateY(0); }
-            50%       { transform: translateY(-8px); }
-        }
-        @keyframes fg-twinkle {
-            0%, 100% { opacity: .9; }
-            50%       { opacity: .15; }
-        }
-        .festive-greeting {
-            max-width: 860px;
-            margin: 0 auto 30px;
-            background: linear-gradient(135deg, #0b1a35 0%, #16325c 50%, #0b1a35 100%);
-            border: 1px solid rgba(212,175,55,.35);
-            border-top: 3px solid #d4af37;
-            border-radius: 18px;
-            padding: 36px 44px 32px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 14px 44px rgba(0,0,0,.3), 0 0 80px rgba(212,175,55,.06);
-        }
-        .festive-greeting::before {
-            content: '';
-            position: absolute; inset: 0;
-            background: radial-gradient(ellipse at 50% 0%, rgba(212,175,55,.14) 0%, transparent 65%);
-            pointer-events: none;
-        }
-        .festive-greeting::after {
-            content: '';
-            position: absolute;
-            top: 0; left: -70%;
-            width: 40%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,.05), transparent);
-            animation: fg-shimmer 5.5s ease-in-out infinite;
-            pointer-events: none;
-        }
-        .fg-stars { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-        .fg-star  { position: absolute; color: rgba(255,255,255,.7); animation: fg-twinkle 2.5s infinite alternate; line-height: 1; }
-        .fg-badge {
-            display: inline-block;
-            background: rgba(212,175,55,.12);
-            border: 1px solid rgba(212,175,55,.3);
-            color: #d4af37;
-            font-size: .72rem;
-            letter-spacing: 2.5px;
-            text-transform: uppercase;
-            padding: 3px 14px;
-            border-radius: 20px;
-            margin-bottom: 16px;
-            position: relative; z-index: 1;
-        }
-        .fg-icon {
-            display: block;
-            font-size: 2.8rem;
-            color: #d4af37;
-            text-shadow: 0 0 24px rgba(212,175,55,.6);
-            animation: fg-float 3.5s ease-in-out infinite;
-            margin-bottom: 14px;
-            position: relative; z-index: 1;
-        }
-        .fg-title {
-            font-family: 'Merriweather', serif;
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: #d4af37;
-            margin: 0 0 10px;
-            letter-spacing: .8px;
-            text-shadow: 0 0 22px rgba(212,175,55,.35);
-            position: relative; z-index: 1;
-        }
-        .fg-divider {
-            width: 90px; height: 1px;
-            background: linear-gradient(90deg, transparent, #d4af37, transparent);
-            margin: 0 auto 16px;
-            position: relative; z-index: 1;
-        }
-        .fg-text {
-            color: rgba(255,255,255,.82);
-            font-size: .95rem;
-            line-height: 1.8;
-            margin: 0 auto;
-            max-width: 560px;
-            position: relative; z-index: 1;
-        }
+
+        /* ── Festive Greeting ── */
+        @keyframes fg-shimmer { 0%{transform:translateX(-100%) skewX(-15deg)} 100%{transform:translateX(380%) skewX(-15deg)} }
+        @keyframes fg-float   { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+        @keyframes fg-twinkle { 0%,100%{opacity:.9} 50%{opacity:.15} }
+        .festive-greeting { max-width:860px; margin:0 auto 30px; background:linear-gradient(135deg,#0b1a35 0%,#16325c 50%,#0b1a35 100%); border:1px solid rgba(212,175,55,.35); border-top:3px solid #d4af37; border-radius:18px; padding:36px 44px 32px; text-align:center; position:relative; overflow:hidden; box-shadow:0 14px 44px rgba(0,0,0,.3),0 0 80px rgba(212,175,55,.06); }
+        .festive-greeting::before { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at 50% 0%,rgba(212,175,55,.14) 0%,transparent 65%); pointer-events:none; }
+        .festive-greeting::after { content:''; position:absolute; top:0; left:-70%; width:40%; height:100%; background:linear-gradient(90deg,transparent,rgba(255,255,255,.05),transparent); animation:fg-shimmer 5.5s ease-in-out infinite; pointer-events:none; }
+        .fg-stars { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+        .fg-star  { position:absolute; color:rgba(255,255,255,.7); animation:fg-twinkle 2.5s infinite alternate; line-height:1; }
+        .fg-badge { display:inline-block; background:rgba(212,175,55,.12); border:1px solid rgba(212,175,55,.3); color:#d4af37; font-size:.72rem; letter-spacing:2.5px; text-transform:uppercase; padding:3px 14px; border-radius:20px; margin-bottom:16px; position:relative; z-index:1; }
+        .fg-icon  { display:block; font-size:2.8rem; color:#d4af37; text-shadow:0 0 24px rgba(212,175,55,.6); animation:fg-float 3.5s ease-in-out infinite; margin-bottom:14px; position:relative; z-index:1; }
+        .fg-title { font-family:'Merriweather',serif; font-size:1.6rem; font-weight:700; color:#d4af37; margin:0 0 10px; letter-spacing:.8px; text-shadow:0 0 22px rgba(212,175,55,.35); position:relative; z-index:1; }
+        .fg-divider { width:90px; height:1px; background:linear-gradient(90deg,transparent,#d4af37,transparent); margin:0 auto 16px; position:relative; z-index:1; }
+        .fg-text { color:rgba(255,255,255,.82); font-size:.95rem; line-height:1.8; margin:0 auto; max-width:560px; position:relative; z-index:1; }
+
         /* ── Weekend Block Notice ── */
-        .weekend-block-notice {
-            background: linear-gradient(135deg, #0f1e10 0%, #1a3a1e 50%, #0f1e10 100%);
-            border: 1px solid rgba(56,161,105,.35);
-            border-top: 3px solid #38a169;
-            border-radius: 16px;
-            padding: 28px 36px 24px;
-            margin-bottom: 24px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 10px 36px rgba(0,0,0,.28), 0 0 60px rgba(56,161,105,.05);
-        }
-        .weekend-block-notice::before {
-            content: '';
-            position: absolute; inset: 0;
-            background: radial-gradient(ellipse at 50% 0%, rgba(56,161,105,.12) 0%, transparent 65%);
-            pointer-events: none;
-        }
-        .weekend-block-notice::after {
-            content: '';
-            position: absolute; top: 0; left: -70%;
-            width: 40%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,.04), transparent);
-            animation: fg-shimmer 5.5s ease-in-out infinite;
-            pointer-events: none;
-        }
-        .wbn-badge {
-            display: inline-block;
-            background: rgba(56,161,105,.12);
-            border: 1px solid rgba(56,161,105,.35);
-            color: #68d391;
-            font-size: .7rem;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            padding: 3px 14px;
-            border-radius: 20px;
-            margin-bottom: 14px;
-            position: relative; z-index: 1;
-        }
-        .wbn-icon {
-            display: block;
-            font-size: 2.4rem;
-            color: #68d391;
-            text-shadow: 0 0 20px rgba(56,161,105,.5);
-            margin-bottom: 10px;
-            position: relative; z-index: 1;
-        }
-        .wbn-title {
-            font-family: 'Merriweather', serif;
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: #68d391;
-            margin: 0 0 8px;
-            text-shadow: 0 0 18px rgba(56,161,105,.3);
-            position: relative; z-index: 1;
-        }
-        .wbn-divider {
-            width: 70px; height: 1px;
-            background: linear-gradient(90deg, transparent, #38a169, transparent);
-            margin: 0 auto 12px;
-            position: relative; z-index: 1;
-        }
-        .wbn-text {
-            color: rgba(255,255,255,.8);
-            font-size: .9rem;
-            line-height: 1.7;
-            margin: 0;
-            position: relative; z-index: 1;
-        }
-        .wbn-days {
-            display: inline-flex;
-            gap: 10px;
-            margin-top: 12px;
-            position: relative; z-index: 1;
-        }
-        .wbn-day {
-            background: rgba(56,161,105,.15);
-            border: 1px solid rgba(56,161,105,.3);
-            color: #68d391;
-            border-radius: 8px;
-            padding: 4px 14px;
-            font-size: .8rem;
-            font-weight: 600;
-        }
-        .holiday-block-notice {
-            background: linear-gradient(135deg, #0b1a35 0%, #16325c 50%, #0b1a35 100%);
-            border: 1px solid rgba(212,175,55,.35);
-            border-top: 3px solid #d4af37;
-            border-radius: 16px;
-            padding: 28px 36px 24px;
-            margin-bottom: 24px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 10px 36px rgba(0,0,0,.28), 0 0 60px rgba(212,175,55,.05);
-        }
-        .holiday-block-notice::before {
-            content: '';
-            position: absolute; inset: 0;
-            background: radial-gradient(ellipse at 50% 0%, rgba(212,175,55,.12) 0%, transparent 65%);
-            pointer-events: none;
-        }
-        .holiday-block-notice::after {
-            content: '';
-            position: absolute; top: 0; left: -70%;
-            width: 40%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,.04), transparent);
-            animation: fg-shimmer 5.5s ease-in-out infinite;
-            pointer-events: none;
-        }
-        .hbn-badge {
-            display: inline-block;
-            background: rgba(212,175,55,.12);
-            border: 1px solid rgba(212,175,55,.3);
-            color: #d4af37;
-            font-size: .7rem;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            padding: 3px 14px;
-            border-radius: 20px;
-            margin-bottom: 14px;
-            position: relative; z-index: 1;
-        }
-        .hbn-icon {
-            display: block;
-            font-size: 2.4rem;
-            color: #d4af37;
-            text-shadow: 0 0 20px rgba(212,175,55,.55);
-            margin-bottom: 10px;
-            position: relative; z-index: 1;
-        }
-        .hbn-title {
-            font-family: 'Merriweather', serif;
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: #d4af37;
-            margin: 0 0 8px;
-            text-shadow: 0 0 18px rgba(212,175,55,.3);
-            position: relative; z-index: 1;
-        }
-        .hbn-divider {
-            width: 70px; height: 1px;
-            background: linear-gradient(90deg, transparent, #d4af37, transparent);
-            margin: 0 auto 12px;
-            position: relative; z-index: 1;
-        }
-        .hbn-text {
-            color: rgba(255,255,255,.8);
-            font-size: .9rem;
-            line-height: 1.7;
-            margin: 0;
-            position: relative; z-index: 1;
-        }
-        /* inline holiday notice inside form-text area */
-        .holiday-inline-notice {
-            background: linear-gradient(135deg, #0b1a35 0%, #16325c 100%);
-            border: 1px solid rgba(212,175,55,.4);
-            border-left: 3px solid #d4af37;
-            border-radius: 10px;
-            padding: 12px 16px;
-            margin-top: 8px;
-            color: rgba(255,255,255,.85);
-            font-size: .82rem;
-            line-height: 1.55;
-        }
-        .holiday-inline-notice .hin-icon { color: #d4af37; margin-right: 6px; }
-        .holiday-inline-notice strong { color: #d4af37; }
-        /* inline weekend notice inside form-text area */
-        .weekend-inline-notice {
-            background: linear-gradient(135deg, #0f1e10 0%, #1a3a1e 100%);
-            border: 1px solid rgba(56,161,105,.4);
-            border-left: 3px solid #38a169;
-            border-radius: 10px;
-            padding: 12px 16px;
-            margin-top: 8px;
-            color: rgba(255,255,255,.85);
-            font-size: .82rem;
-            line-height: 1.55;
-        }
-        .weekend-inline-notice .win-icon { color: #68d391; margin-right: 6px; }
-        .weekend-inline-notice strong { color: #68d391; }
+        .weekend-block-notice { background:linear-gradient(135deg,#0f1e10 0%,#1a3a1e 50%,#0f1e10 100%); border:1px solid rgba(56,161,105,.35); border-top:3px solid #38a169; border-radius:16px; padding:28px 36px 24px; margin-bottom:24px; text-align:center; position:relative; overflow:hidden; box-shadow:0 10px 36px rgba(0,0,0,.28),0 0 60px rgba(56,161,105,.05); }
+        .weekend-block-notice::before { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at 50% 0%,rgba(56,161,105,.12) 0%,transparent 65%); pointer-events:none; }
+        .weekend-block-notice::after { content:''; position:absolute; top:0; left:-70%; width:40%; height:100%; background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent); animation:fg-shimmer 5.5s ease-in-out infinite; pointer-events:none; }
+        .wbn-badge  { display:inline-block; background:rgba(56,161,105,.12); border:1px solid rgba(56,161,105,.35); color:#68d391; font-size:.7rem; letter-spacing:2px; text-transform:uppercase; padding:3px 14px; border-radius:20px; margin-bottom:14px; position:relative; z-index:1; }
+        .wbn-icon   { display:block; font-size:2.4rem; color:#68d391; text-shadow:0 0 20px rgba(56,161,105,.5); margin-bottom:10px; position:relative; z-index:1; }
+        .wbn-title  { font-family:'Merriweather',serif; font-size:1.25rem; font-weight:700; color:#68d391; margin:0 0 8px; text-shadow:0 0 18px rgba(56,161,105,.3); position:relative; z-index:1; }
+        .wbn-divider { width:70px; height:1px; background:linear-gradient(90deg,transparent,#38a169,transparent); margin:0 auto 12px; position:relative; z-index:1; }
+        .wbn-text   { color:rgba(255,255,255,.8); font-size:.9rem; line-height:1.7; margin:0; position:relative; z-index:1; }
+        .wbn-days   { display:inline-flex; gap:10px; margin-top:12px; position:relative; z-index:1; }
+        .wbn-day    { background:rgba(56,161,105,.15); border:1px solid rgba(56,161,105,.3); color:#68d391; border-radius:8px; padding:4px 14px; font-size:.8rem; font-weight:600; }
+
+        /* ── Holiday Block Notice ── */
+        .holiday-block-notice { background:linear-gradient(135deg,#0b1a35 0%,#16325c 50%,#0b1a35 100%); border:1px solid rgba(212,175,55,.35); border-top:3px solid #d4af37; border-radius:16px; padding:28px 36px 24px; margin-bottom:24px; text-align:center; position:relative; overflow:hidden; box-shadow:0 10px 36px rgba(0,0,0,.28),0 0 60px rgba(212,175,55,.05); }
+        .holiday-block-notice::before { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at 50% 0%,rgba(212,175,55,.12) 0%,transparent 65%); pointer-events:none; }
+        .holiday-block-notice::after { content:''; position:absolute; top:0; left:-70%; width:40%; height:100%; background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent); animation:fg-shimmer 5.5s ease-in-out infinite; pointer-events:none; }
+        .hbn-badge  { display:inline-block; background:rgba(212,175,55,.12); border:1px solid rgba(212,175,55,.3); color:#d4af37; font-size:.7rem; letter-spacing:2px; text-transform:uppercase; padding:3px 14px; border-radius:20px; margin-bottom:14px; position:relative; z-index:1; }
+        .hbn-icon   { display:block; font-size:2.4rem; color:#d4af37; text-shadow:0 0 20px rgba(212,175,55,.55); margin-bottom:10px; position:relative; z-index:1; }
+        .hbn-title  { font-family:'Merriweather',serif; font-size:1.25rem; font-weight:700; color:#d4af37; margin:0 0 8px; text-shadow:0 0 18px rgba(212,175,55,.3); position:relative; z-index:1; }
+        .hbn-divider { width:70px; height:1px; background:linear-gradient(90deg,transparent,#d4af37,transparent); margin:0 auto 12px; position:relative; z-index:1; }
+        .hbn-text   { color:rgba(255,255,255,.8); font-size:.9rem; line-height:1.7; margin:0; position:relative; z-index:1; }
+
+        /* ── Inline notices ── */
+        .holiday-inline-notice { background:linear-gradient(135deg,#0b1a35 0%,#16325c 100%); border:1px solid rgba(212,175,55,.4); border-left:3px solid #d4af37; border-radius:10px; padding:12px 16px; margin-top:8px; color:rgba(255,255,255,.85); font-size:.82rem; line-height:1.55; }
+        .holiday-inline-notice .hin-icon { color:#d4af37; margin-right:6px; }
+        .holiday-inline-notice strong { color:#d4af37; }
+        .weekend-inline-notice { background:linear-gradient(135deg,#0f1e10 0%,#1a3a1e 100%); border:1px solid rgba(56,161,105,.4); border-left:3px solid #38a169; border-radius:10px; padding:12px 16px; margin-top:8px; color:rgba(255,255,255,.85); font-size:.82rem; line-height:1.55; }
+        .weekend-inline-notice .win-icon { color:#68d391; margin-right:6px; }
+        .weekend-inline-notice strong { color:#68d391; }
+
         .alert { border-radius:6px; border:none; box-shadow:0 4px 6px rgba(0,0,0,0.05); }
         .office-card { background:#fff; border-radius:10px; padding:18px; box-shadow:0 2px 8px rgba(0,51,102,0.06); border-left:4px solid var(--gov-blue); height:100%; }
         .office-name { font-weight:700; color:var(--gov-blue); font-size:1rem; }
@@ -553,7 +311,6 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
     </style>
 </head>
 <body>
-    <!-- Logo shown only in header below -->
 
 <!-- Header -->
 <header>
@@ -626,7 +383,7 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
         </div>
     </div>
 
-    <!-- ALERTS — mesazhi ruhet si tekst i pastër, htmlspecialchars bëhet këtu -->
+    <!-- ALERTS -->
     <?php if ($success): ?>
         <div class="alert alert-success alert-dismissible fade show" role="alert">
             <i class="fas fa-check-circle me-2"></i>
@@ -637,8 +394,8 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
             try {
                 $stmtStatus = $pdo->prepare("SELECT payment_status FROM reservations WHERE id = ?");
                 $stmtStatus->execute([$reservation_id]);
-                $rowStatus    = $stmtStatus->fetch();
-                $pay_status   = $rowStatus['payment_status'] ?? '';
+                $rowStatus  = $stmtStatus->fetch();
+                $pay_status = $rowStatus['payment_status'] ?? '';
             } catch (PDOException $e) { $pay_status = ''; }
         ?>
         <div class="alert alert-info border-start border-info border-4" role="alert">
@@ -800,7 +557,7 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
                             </div>
                         </div>
 
-                        <!-- Available Employees Section -->
+                        <!-- Punonjësit e lirë -->
                         <div class="mb-4">
                             <label class="form-label"><i class="fas fa-user-tie me-1"></i>Punonjësit e Lirë <span class="badge bg-info ms-2" id="employee-status-badge">Zgjidhni zyrën, datën dhe orën</span></label>
                             <div id="employees-container" class="alert alert-secondary py-3" style="display: none;">
@@ -1021,96 +778,80 @@ $bajram_greeting_text = 'Gëzuar Fitër Bajrami! Qoftë kjo festë e bekuar buri
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
-    // Submit button feedback
-    // Service pricing data
     const servicePrices = <?php echo $service_prices_json; ?>;
-    const TAX_RATE = 0.18; // 18% TVSH
+    const TAX_RATE = 0.18;
 
-    // Function to calculate and update prices
     function updatePriceDisplay() {
         const serviceSelect = document.getElementById('service');
         const selectedService = serviceSelect ? serviceSelect.value : '';
-        
-        // Safe element references with null checks
-        const priceBadge = document.getElementById('service-price-badge');
-        const amountField = document.getElementById('amount');
+        const priceBadge      = document.getElementById('service-price-badge');
+        const amountField     = document.getElementById('amount');
         const tinkyAmountField = document.getElementById('tinky_amount');
-        const priceBreakdown = document.getElementById('price-breakdown');
-        const basePrice_elem = document.getElementById('base-price');
-        const taxAmount_elem = document.getElementById('tax-amount');
-        const totalPrice_elem = document.getElementById('total-price');
-        
+        const priceBreakdown  = document.getElementById('price-breakdown');
+        const basePriceElem   = document.getElementById('base-price');
+        const taxAmountElem   = document.getElementById('tax-amount');
+        const totalPriceElem  = document.getElementById('total-price');
+
         if (!selectedService || !servicePrices[selectedService]) {
-            // Reset to zero if no service selected
-            if (priceBadge) priceBadge.textContent = '€0.00';
-            if (amountField) amountField.value = '0.00';
+            if (priceBadge)      priceBadge.textContent = '€0.00';
+            if (amountField)     amountField.value = '0.00';
             if (tinkyAmountField) tinkyAmountField.value = '0.00';
-            if (priceBreakdown) priceBreakdown.style.display = 'none';
+            if (priceBreakdown)  priceBreakdown.style.display = 'none';
             return;
         }
-        
-        const basePrice = servicePrices[selectedService];
-        const taxAmount = basePrice * TAX_RATE;
+
+        const basePrice  = servicePrices[selectedService];
+        const taxAmount  = basePrice * TAX_RATE;
         const totalPrice = basePrice + taxAmount;
-        
-        // Update badge and form fields with null checks
-        if (priceBadge) priceBadge.textContent = '€' + totalPrice.toFixed(2);
-        if (amountField) amountField.value = totalPrice.toFixed(2);
+
+        if (priceBadge)       priceBadge.textContent = '€' + totalPrice.toFixed(2);
+        if (amountField)      amountField.value = totalPrice.toFixed(2);
         if (tinkyAmountField) tinkyAmountField.value = totalPrice.toFixed(2);
-        
-        // Update price breakdown with null checks
-        if (basePrice_elem) basePrice_elem.textContent = '€' + basePrice.toFixed(2);
-        if (taxAmount_elem) taxAmount_elem.textContent = '€' + taxAmount.toFixed(2);
-        if (totalPrice_elem) totalPrice_elem.textContent = '€' + totalPrice.toFixed(2);
-        if (priceBreakdown) priceBreakdown.style.display = 'block';
+        if (basePriceElem)    basePriceElem.textContent  = '€' + basePrice.toFixed(2);
+        if (taxAmountElem)    taxAmountElem.textContent   = '€' + taxAmount.toFixed(2);
+        if (totalPriceElem)   totalPriceElem.textContent  = '€' + totalPrice.toFixed(2);
+        if (priceBreakdown)   priceBreakdown.style.display = 'block';
     }
 
-    // Listen for service selection changes
     const serviceSelect = document.getElementById('service');
     if (serviceSelect) {
         serviceSelect.addEventListener('change', updatePriceDisplay);
-        // Initial calculation on page load
         updatePriceDisplay();
     }
 
-    const form = document.getElementById('reservation-form');
+    // Submit feedback
+    const form      = document.getElementById('reservation-form');
     const submitBtn = document.getElementById('submit-btn');
     if (form && submitBtn) {
         form.addEventListener('submit', function () {
             submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Po procesohet...';
-            submitBtn.disabled = true;
+            submitBtn.disabled  = true;
             setTimeout(() => {
                 submitBtn.innerHTML = '<i class="fas fa-calendar-check me-2"></i><?php echo htmlspecialchars($L['submit']); ?>';
-                submitBtn.disabled = false;
+                submitBtn.disabled  = false;
             }, 10000);
         });
     }
 
-    // Sync zyra_id from main form to payment form
-    const zyraSelect = document.getElementById('zyra_id');
+    // Sync zyra_id
+    const zyraSelect    = document.getElementById('zyra_id');
     const formZyraInput = document.getElementById('form_zyra_id');
     if (zyraSelect && formZyraInput) {
-        zyraSelect.addEventListener('change', function () {
-            formZyraInput.value = this.value;
-        });
-        // Also set initial value if zyra is selected
-        if (zyraSelect.value) {
-            formZyraInput.value = zyraSelect.value;
-        }
+        zyraSelect.addEventListener('change', function () { formZyraInput.value = this.value; });
+        if (zyraSelect.value) formZyraInput.value = zyraSelect.value;
     }
 
     // Tinky toggle
-    var bankSelect = document.getElementById('emri_bankes');
-    var tinkyForm  = document.getElementById('form-tinky-dropdown');
-    var mainBtn    = document.getElementById('btn-standard-pay');
-
+    const bankSelect = document.getElementById('bank_select');
+    const tinkyForm  = document.getElementById('form-tinky-dropdown');
+    const mainBtn    = document.getElementById('btn-standard-pay');
     if (bankSelect && tinkyForm) {
         bankSelect.addEventListener('change', function () {
             if (this.value === 'Tinky') {
                 tinkyForm.style.display = 'block';
                 if (mainBtn) mainBtn.style.display = 'none';
                 setTimeout(() => {
-                    var first = tinkyForm.querySelector('input[name="tinky_payer_name"]');
+                    const first = tinkyForm.querySelector('input[name="tinky_payer_name"]');
                     if (first) first.focus();
                 }, 100);
             } else {
@@ -1122,34 +863,34 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Tinky submit
     function showTinkyMessage(type, text) {
-        var existing = document.getElementById('tinky-message');
+        const existing = document.getElementById('tinky-message');
         if (existing) existing.remove();
-        var div = document.createElement('div');
-        div.id = 'tinky-message';
+        const div = document.createElement('div');
+        div.id        = 'tinky-message';
         div.className = type === 'success' ? 'alert alert-success mt-2 small' : 'alert alert-danger mt-2 small';
         div.innerHTML = (type === 'success' ? '<i class="fas fa-check-circle"></i> ' : '<i class="fas fa-times-circle"></i> ') + text;
         if (tinkyForm) tinkyForm.parentNode.insertBefore(div, tinkyForm);
     }
 
-    var tinkySubmit = document.getElementById('tinky-submit');
+    const tinkySubmit = document.getElementById('tinky-submit');
     if (tinkySubmit && tinkyForm) {
         tinkySubmit.addEventListener('click', function () {
-            var name   = tinkyForm.querySelector('input[name="tinky_payer_name"]');
-            var iban   = tinkyForm.querySelector('input[name="tinky_payer_iban"]');
-            var amount = tinkyForm.querySelector('input[name="tinky_amount"]');
-            var csrf   = tinkyForm.querySelector('input[name="csrf_token"]');
-            var resId  = tinkyForm.querySelector('input[name="reservation_id"]');
+            const name   = tinkyForm.querySelector('input[name="tinky_payer_name"]');
+            const iban   = tinkyForm.querySelector('input[name="tinky_payer_iban"]');
+            const amount = tinkyForm.querySelector('input[name="tinky_amount"]');
+            const csrf   = tinkyForm.querySelector('input[name="csrf_token"]');
+            const resId  = tinkyForm.querySelector('input[name="reservation_id"]');
 
             if (!name.value.trim() || !iban.value.trim() || !amount.value) {
                 showTinkyMessage('error', 'Ju lutemi plotësoni të gjitha fushat e Tinky.');
                 return;
             }
 
-            var orig = tinkySubmit.innerHTML;
+            const orig = tinkySubmit.innerHTML;
             tinkySubmit.disabled = true;
             tinkySubmit.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Duke procesuar...';
 
-            var fd = new FormData();
+            const fd = new FormData();
             fd.append('payment_method', 'tinky');
             fd.append('csrf_token',     csrf   ? csrf.value   : '');
             fd.append('reservation_id', resId  ? resId.value  : '');
@@ -1160,7 +901,7 @@ document.addEventListener('DOMContentLoaded', function () {
             fetch('tinky_payment.php', { method:'POST', body:fd })
                 .then(r => r.json().catch(() => ({ success:false, message:'Përgjigje e pavlefshme nga serveri.' })))
                 .then(data => {
-                    tinkySubmit.disabled = false;
+                    tinkySubmit.disabled  = false;
                     tinkySubmit.innerHTML = orig;
                     if (data.success) {
                         showTinkyMessage('success', data.message || 'Pagesa u krye me sukses!');
@@ -1170,224 +911,174 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 })
                 .catch(() => {
-                    tinkySubmit.disabled = false;
+                    tinkySubmit.disabled  = false;
                     tinkySubmit.innerHTML = orig;
                     showTinkyMessage('error', 'Gabim në komunikim me serverin.');
                 });
         });
     }
 
-    // Update hours display based on selected date
-    var dateInput = document.getElementById('date');
-    var timeInput = document.getElementById('time');
-    // zyraSelect is already declared above with const
-    
+    // Date/time logic
+    const dateInput = document.getElementById('date');
+    const timeInput = document.getElementById('time');
+
+    function getTimeCol() { return timeInput ? timeInput.closest('.col-md-6') : null; }
+    function getHoursDisplay() { const c = getTimeCol(); return c ? c.querySelector('.form-text') : null; }
+
     function updateHoursDisplay() {
         if (!dateInput) return;
-        
-        var selectedDate = dateInput.value; // Format: YYYY-MM-DD
-        var ramazanEndDate = '2026-03-18';
-        var isRamadan = selectedDate && selectedDate <= ramazanEndDate;
+        const selectedDate = dateInput.value;
 
-        // Blloko ditët zyrtare të pushimit
-        var officialHolidays = ['2026-03-20'];
+        // Official holidays
+        const officialHolidays = ['2026-03-20'];
         if (selectedDate && officialHolidays.includes(selectedDate)) {
             if (timeInput) { timeInput.value = ''; timeInput.disabled = true; }
-            var timeInputCol = timeInput ? timeInput.closest('.col-md-6') : null;
-            var hoursDisplay = timeInputCol ? timeInputCol.querySelector('.form-text') : null;
-            if (hoursDisplay) {
-                hoursDisplay.className = 'form-text holiday-inline-notice';
-                hoursDisplay.innerHTML =
-                    '<span class="hin-icon"><i class="fas fa-moon"></i></span>' +
-                    '<strong>Ditë Zyrtare Pushimi &mdash; Fitër Bajrami</strong><br>' +
-                    'Zyrat noteriale janë të mbyllura më 20 Mars 2026.<br>' +
-                    '<span style="opacity:.75">Ju lutemi zgjidhni një datë tjetër pune.</span>';
+            const hd = getHoursDisplay();
+            if (hd) {
+                hd.className = 'form-text holiday-inline-notice';
+                hd.innerHTML = '<span class="hin-icon"><i class="fas fa-moon"></i></span><strong>Ditë Zyrtare Pushimi &mdash; Fitër Bajrami</strong><br>Zyrat noteriale janë të mbyllura më 20 Mars 2026.<br><span style="opacity:.75">Ju lutemi zgjidhni një datë tjetër pune.</span>';
             }
-            var container = document.getElementById('employees-container');
-            if (container) container.style.display = 'none';
+            const c = document.getElementById('employees-container');
+            if (c) c.style.display = 'none';
             return;
         }
 
-        // Blloko fund-javën (e shtunë = 6, e diel = 0)
+        // Weekends
         if (selectedDate) {
-            var parts = selectedDate.split('-');
-            var selDateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            var dayOfWeek = selDateObj.getDay(); // 0=diel, 6=e shtunë
-            if (dayOfWeek === 0 || dayOfWeek === 6) {
+            const parts = selectedDate.split('-');
+            const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            const day = d.getDay();
+            if (day === 0 || day === 6) {
                 if (timeInput) { timeInput.value = ''; timeInput.disabled = true; }
-                var timeInputCol2 = timeInput ? timeInput.closest('.col-md-6') : null;
-                var hoursDisplay2 = timeInputCol2 ? timeInputCol2.querySelector('.form-text') : null;
-                var dayName = dayOfWeek === 6 ? 'e Shtunë' : 'e Diel';
-                if (hoursDisplay2) {
-                    hoursDisplay2.className = 'form-text weekend-inline-notice';
-                    hoursDisplay2.innerHTML =
-                        '<span class="win-icon"><i class="fas fa-umbrella-beach"></i></span>' +
-                        '<strong>Fund-javë &mdash; ' + dayName + '</strong><br>' +
-                        'Zyrat noteriale janë të mbyllura në fund-javë.<br>' +
-                        '<span style="opacity:.75">Rezervimet pranohen E Hënë &ndash; E Premte.</span>';
+                const hd = getHoursDisplay();
+                const dayName = day === 6 ? 'e Shtunë' : 'e Diel';
+                if (hd) {
+                    hd.className = 'form-text weekend-inline-notice';
+                    hd.innerHTML = '<span class="win-icon"><i class="fas fa-umbrella-beach"></i></span><strong>Fund-javë &mdash; ' + dayName + '</strong><br>Zyrat noteriale janë të mbyllura në fund-javë.<br><span style="opacity:.75">Rezervimet pranohen E Hënë &ndash; E Premte.</span>';
                 }
-                var container2 = document.getElementById('employees-container');
-                if (container2) container2.style.display = 'none';
+                const c = document.getElementById('employees-container');
+                if (c) c.style.display = 'none';
                 return;
             }
         }
 
-        // Reset form-text style when switching away from blocked date
-        var timeInputColReset = timeInput ? timeInput.closest('.col-md-6') : null;
-        var hoursDisplayReset = timeInputColReset ? timeInputColReset.querySelector('.form-text') : null;
-        if (hoursDisplayReset && (hoursDisplayReset.classList.contains('holiday-inline-notice') || hoursDisplayReset.classList.contains('weekend-inline-notice'))) {
-            hoursDisplayReset.className = 'form-text';
+        // Reset inline notice if switching away from blocked date
+        const hd = getHoursDisplay();
+        if (hd && (hd.classList.contains('holiday-inline-notice') || hd.classList.contains('weekend-inline-notice'))) {
+            hd.className = 'form-text';
         }
-
-        // Ribëj normale nëse ndryshon data
         if (timeInput) timeInput.disabled = false;
-        
-        // Update max time attribute
-        if (timeInput) {
-            timeInput.max = isRamadan ? '15:00' : '16:00';
-        }
-        
-        // Find the form-text element that's near the time input
-        var timeInputCol = timeInput ? timeInput.closest('.col-md-6') : null;
-        var hoursDisplay = timeInputCol ? timeInputCol.querySelector('.form-text') : null;
-        
-        // Update the displayed message
-        if (hoursDisplay) {
+
+        // Ramazan hours
+        const ramazanEnd = '2026-03-18';
+        const isRamadan  = selectedDate && selectedDate <= ramazanEnd;
+        if (timeInput) timeInput.max = isRamadan ? '15:00' : '16:00';
+        if (hd && !hd.classList.contains('holiday-inline-notice') && !hd.classList.contains('weekend-inline-notice')) {
             if (isRamadan) {
-                hoursDisplay.classList.add('text-danger');
-                hoursDisplay.innerHTML = 'Gjatë Ramazanit: E Hënë–E Premte (08:00–15:00)';
+                hd.classList.add('text-danger');
+                hd.innerHTML = 'Gjatë Ramazanit: E Hënë–E Premte (08:00–15:00)';
             } else {
-                hoursDisplay.classList.remove('text-danger');
-                hoursDisplay.innerHTML = 'Zyrat punojnë E Hënë–E Premte (08:00–16:00).';
+                hd.classList.remove('text-danger');
+                hd.innerHTML = 'Zyrat punojnë E Hënë–E Premte (08:00–16:00).';
             }
         }
-        
-        // Load available employees
+
         loadAvailableEmployees();
     }
-    
+
     function loadAvailableEmployees() {
-        var zyraId = zyraSelect ? zyraSelect.value : '';
-        var date = dateInput ? dateInput.value : '';
-        var time = timeInput ? timeInput.value : '';
-        
-        var container = document.getElementById('employees-container');
-        var loadingSpinner = document.getElementById('loading-spinner');
-        var noEmployeesAlert = document.getElementById('no-employees-alert');
-        var employeesList = document.getElementById('employees-list');
-        var statusBadge = document.getElementById('employee-status-badge');
-        
-        // Hide container if required fields are empty
+        const zyraId    = zyraSelect ? zyraSelect.value : '';
+        const date      = dateInput  ? dateInput.value  : '';
+        const time      = timeInput  ? timeInput.value  : '';
+        const container = document.getElementById('employees-container');
+        const spinner   = document.getElementById('loading-spinner');
+        const noEmpAlert = document.getElementById('no-employees-alert');
+        const empList   = document.getElementById('employees-list');
+        const badge     = document.getElementById('employee-status-badge');
+
         if (!zyraId || !date || !time) {
             if (container) container.style.display = 'none';
-            if (statusBadge) statusBadge.textContent = 'Zgjidhni zyrën, datën dhe orën';
+            if (badge)     badge.textContent = 'Zgjidhni zyrën, datën dhe orën';
             return;
         }
-        
-        // Show container and loading spinner
+
         if (container) container.style.display = 'block';
-        if (loadingSpinner) loadingSpinner.style.display = 'block';
-        if (noEmployeesAlert) noEmployeesAlert.style.display = 'none';
-        if (employeesList) employeesList.innerHTML = '';
-        
-        // Fetch available employees
+        if (spinner)   spinner.style.display   = 'block';
+        if (noEmpAlert) noEmpAlert.style.display = 'none';
+        if (empList)    empList.innerHTML = '';
+
         fetch('api/get_available_employees.php?zyra_id=' + encodeURIComponent(zyraId) + '&date=' + encodeURIComponent(date) + '&time=' + encodeURIComponent(time))
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
-                loadingSpinner.style.display = 'none';
-                
+                if (spinner) spinner.style.display = 'none';
                 if (data.success && data.employees && data.employees.length > 0) {
-                    noEmployeesAlert.style.display = 'none';
-                    statusBadge.textContent = data.count + ' punonjës i lirë';
-                    
-                    // Display employee cards
-                    data.employees.forEach(function(employee) {
-                        var card = document.createElement('div');
+                    if (noEmpAlert) noEmpAlert.style.display = 'none';
+                    if (badge) badge.textContent = data.count + ' punonjës i lirë';
+                    data.employees.forEach(function(emp) {
+                        const card = document.createElement('div');
                         card.className = 'col-12 col-sm-6';
                         card.innerHTML = `
-                            <div class="card employee-card p-3 cursor-pointer" style="cursor: pointer; transition: all 0.3s;" 
-                                 data-employee-id="${employee.id}" 
-                                 data-employee-name="${employee.emri} ${employee.mbiemri}">
+                            <div class="card employee-card p-3" style="cursor:pointer;transition:all .3s;"
+                                 data-employee-id="${emp.id}">
                                 <div class="d-flex align-items-center">
                                     <div class="w-100">
-                                        <h6 class="mb-1 fw-bold text-primary">
-                                            <i class="fas fa-user-check me-2"></i>${employee.emri} ${employee.mbiemri}
-                                        </h6>
-                                        <small class="text-muted d-block">
-                                            <i class="fas fa-briefcase"></i> ${employee.pozita}
-                                        </small>
-                                        <small class="text-muted d-block">
-                                            <i class="fas fa-envelope"></i> ${employee.email}
-                                        </small>
-                                        ${employee.telefoni ? `<small class="text-muted d-block"><i class="fas fa-phone"></i> ${employee.telefoni}</small>` : ''}
+                                        <h6 class="mb-1 fw-bold text-primary"><i class="fas fa-user-check me-2"></i>${emp.emri} ${emp.mbiemri}</h6>
+                                        <small class="text-muted d-block"><i class="fas fa-briefcase"></i> ${emp.pozita}</small>
+                                        <small class="text-muted d-block"><i class="fas fa-envelope"></i> ${emp.email}</small>
+                                        ${emp.telefoni ? `<small class="text-muted d-block"><i class="fas fa-phone"></i> ${emp.telefoni}</small>` : ''}
                                     </div>
                                     <div class="ms-2">
-                                        <i class="fas fa-check-circle text-success fa-lg" style="display: none;" class="employee-check"></i>
+                                        <i class="fas fa-check-circle text-success fa-lg employee-check" style="display:none;"></i>
                                     </div>
                                 </div>
-                            </div>
-                        `;
-                        employeesList.appendChild(card);
-                        
-                        // Add click handler
+                            </div>`;
+                        if (empList) empList.appendChild(card);
                         card.querySelector('.employee-card').addEventListener('click', function() {
-                            selectEmployee(employee.id, employee.emri + ' ' + employee.mbiemri, this);
+                            selectEmployee(emp.id, this);
                         });
                     });
                 } else {
-                    noEmployeesAlert.style.display = 'block';
-                    statusBadge.textContent = 'Nuk ka punonjës të lirë';
-                    employeesList.innerHTML = '';
+                    if (noEmpAlert) noEmpAlert.style.display = 'block';
+                    if (badge) badge.textContent = 'Nuk ka punonjës të lirë';
+                    if (empList) empList.innerHTML = '';
                 }
             })
-            .catch(error => {
-                loadingSpinner.style.display = 'none';
-                console.error('Error fetching employees:', error);
-                noEmployeesAlert.textContent = '⚠️ Gabim në ngarkimin e punonjësve. Provoni më vonë.';
-                noEmployeesAlert.style.display = 'block';
+            .catch(err => {
+                if (spinner) spinner.style.display = 'none';
+                console.error('Employee fetch error:', err);
+                if (noEmpAlert) { noEmpAlert.textContent = '⚠️ Gabim në ngarkimin e punonjësve. Provoni më vonë.'; noEmpAlert.style.display = 'block'; }
             });
     }
-    
-    function selectEmployee(employeeId, employeeName, cardElement) {
-        var input = document.getElementById('punonjesi_id');
-        var allCards = document.querySelectorAll('.employee-card');
-        
-        // Remove selection from all cards
-        allCards.forEach(function(card) {
-            card.classList.remove('border-success', 'border-2');
-            card.style.backgroundColor = '';
-            var checkIcon = card.querySelector('.employee-check');
-            if (checkIcon) checkIcon.style.display = 'none';
+
+    function selectEmployee(employeeId, cardElement) {
+        document.querySelectorAll('.employee-card').forEach(function(c) {
+            c.classList.remove('border-success', 'border-2');
+            c.style.backgroundColor = '';
+            const ch = c.querySelector('.employee-check');
+            if (ch) ch.style.display = 'none';
         });
-        
-        // Mark the selected card
         cardElement.classList.add('border-success', 'border-2');
         cardElement.style.backgroundColor = '#f0f8f0';
-        var checkIcon = cardElement.querySelector('.employee-check');
-        if (checkIcon) checkIcon.style.display = 'block';
-        
-        // Save to hidden input
+        const ch = cardElement.querySelector('.employee-check');
+        if (ch) ch.style.display = 'block';
+        const input = document.getElementById('punonjesi_id');
         if (input) input.value = employeeId;
     }
-    
+
     if (dateInput) {
         dateInput.addEventListener('change', updateHoursDisplay);
-        dateInput.addEventListener('input', updateHoursDisplay);
+        dateInput.addEventListener('input',  updateHoursDisplay);
     }
-    
     if (timeInput) {
         timeInput.addEventListener('change', loadAvailableEmployees);
-        timeInput.addEventListener('input', loadAvailableEmployees);
+        timeInput.addEventListener('input',  loadAvailableEmployees);
     }
-    
     if (zyraSelect) {
         zyraSelect.addEventListener('change', loadAvailableEmployees);
     }
-    
-    // Load employees on page load if all fields are set
+
     loadAvailableEmployees();
-}); // <-- ADD THIS LINE - closes the DOMContentLoaded event listener
+});
 </script>
 </body>
 </html>
-
